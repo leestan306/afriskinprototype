@@ -24,7 +24,20 @@ interface Product {
   use: string;
   when: "AM" | "PM" | "AM/PM";
   emoji: string;
+  url: string;
 }
+
+type ScanRecord = {
+  id: string;
+  createdAt: number;
+  photoDataUrl: string;
+  skinScore: number;
+  conditions: Condition[];
+  products: Product[];
+};
+
+const SCAN_HISTORY_STORAGE_KEY = "afriskin.scanHistory.v1";
+const SCAN_HISTORY_MAX_ITEMS = 12;
 
 // ── Condition pool ────────────────────────────────────────
 const CONDITION_POOL: Omit<Condition, "score" | "severity">[] = [
@@ -116,6 +129,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Remove impurities without stripping the skin barrier",
     when: "AM/PM",
     emoji: "🫧",
+    url: "https://example.com/products/gentle-foaming-cleanser?ref=afriskin",
   },
   {
     name: "Niacinamide 10% Serum",
@@ -123,6 +137,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Fades dark spots, minimises pores, evens tone",
     when: "AM/PM",
     emoji: "💧",
+    url: "https://example.com/products/niacinamide-10-serum?ref=afriskin",
   },
   {
     name: "Vitamin C Brightening Serum",
@@ -130,6 +145,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Antioxidant protection and radiance boost",
     when: "AM",
     emoji: "🍊",
+    url: "https://example.com/products/vitamin-c-brightening-serum?ref=afriskin",
   },
   {
     name: "Hyaluronic Acid Booster",
@@ -137,6 +153,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Draws moisture into skin for all-day plumpness",
     when: "AM/PM",
     emoji: "💦",
+    url: "https://example.com/products/hyaluronic-acid-booster?ref=afriskin",
   },
   {
     name: "SPF 50 Sunscreen",
@@ -144,6 +161,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Prevents further dark spots and UV damage",
     when: "AM",
     emoji: "☀️",
+    url: "https://example.com/products/spf-50-sunscreen?ref=afriskin",
   },
   {
     name: "Salicylic Acid Toner",
@@ -151,6 +169,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Clears pores and reduces active breakouts",
     when: "PM",
     emoji: "✨",
+    url: "https://example.com/products/salicylic-acid-toner?ref=afriskin",
   },
   {
     name: "Retinol 0.3% Night Serum",
@@ -158,6 +177,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Speeds cell turnover, smooths texture, firms skin",
     when: "PM",
     emoji: "🌙",
+    url: "https://example.com/products/retinol-03-night-serum?ref=afriskin",
   },
   {
     name: "Ceramide Barrier Moisturiser",
@@ -165,6 +185,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Repairs and strengthens the skin barrier",
     when: "AM/PM",
     emoji: "🧴",
+    url: "https://example.com/products/ceramide-barrier-moisturiser?ref=afriskin",
   },
   {
     name: "Caffeine Eye Cream",
@@ -172,6 +193,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Reduces puffiness and dark circles",
     when: "AM",
     emoji: "👁️",
+    url: "https://example.com/products/caffeine-eye-cream?ref=afriskin",
   },
   {
     name: "AHA Exfoliating Mask",
@@ -179,6 +201,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Weekly exfoliation for glow and smoothness",
     when: "PM",
     emoji: "🌿",
+    url: "https://example.com/products/aha-exfoliating-mask?ref=afriskin",
   },
   {
     name: "Centella Cica Serum",
@@ -186,6 +209,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Soothes redness and strengthens sensitive skin",
     when: "AM/PM",
     emoji: "🍃",
+    url: "https://example.com/products/centella-cica-serum?ref=afriskin",
   },
   {
     name: "Peptide Firming Cream",
@@ -193,6 +217,7 @@ const PRODUCT_POOL: Product[] = [
     use: "Stimulates collagen and restores elasticity",
     when: "PM",
     emoji: "💎",
+    url: "https://example.com/products/peptide-firming-cream?ref=afriskin",
   },
 ];
 
@@ -231,6 +256,42 @@ function getSkinScore(conditions: Condition[]) {
   if (!conditions.length) return 0;
   const avg = conditions.reduce((s, c) => s + c.score, 0) / conditions.length;
   return Math.round(100 - avg);
+}
+
+function loadScanHistory(): ScanRecord[] {
+  try {
+    const raw = localStorage.getItem(SCAN_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(Boolean) as ScanRecord[];
+  } catch {
+    return [];
+  }
+}
+
+function saveScanHistory(next: ScanRecord[]) {
+  try {
+    localStorage.setItem(SCAN_HISTORY_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore storage quota / disabled storage
+  }
+}
+
+async function copyToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "true");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
 }
 
 // ── Animated Score Ring ───────────────────────────────────
@@ -321,12 +382,33 @@ function ScoreRing({ score, size = 120 }: { score: number; size?: number }) {
 }
 
 // ── Scan Camera Mock ──────────────────────────────────────
-function ScanFace({ onCapture }: { onCapture: () => void }) {
+function ScanFace({
+  onCapture,
+}: {
+  onCapture: (photoDataUrl: string) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [captured, setCaptured] = useState(false);
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    if (!video) return null;
+    const w = Math.max(1, video.videoWidth || 720);
+    const h = Math.max(1, video.videoHeight || 1280);
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    // mirror horizontally to match the on-screen preview (scaleX(-1))
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, w, h);
+    return canvas.toDataURL("image/jpeg", 0.88);
+  };
 
   useEffect(() => {
     navigator.mediaDevices
@@ -356,7 +438,14 @@ function ScanFace({ onCapture }: { onCapture: () => void }) {
         clearInterval(iv);
         setCountdown(null);
         setCaptured(true);
-        setTimeout(onCapture, 800);
+        const photo = capturePhoto();
+        const dataUrl =
+          photo ||
+          "data:image/svg+xml;charset=utf-8," +
+            encodeURIComponent(
+              `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2C1A0E"/><stop offset="1" stop-color="#0e0a06"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><text x="50%" y="50%" fill="rgba(250,247,242,0.65)" font-family="Arial" font-size="22" text-anchor="middle">Prototype selfie</text></svg>`,
+            );
+        setTimeout(() => onCapture(dataUrl), 500);
       } else {
         setCountdown(c);
       }
@@ -627,7 +716,7 @@ function ScanFace({ onCapture }: { onCapture: () => void }) {
 }
 
 // ── Analyzing Screen ──────────────────────────────────────
-function AnalyzingScreen() {
+function AnalyzingScreen({ photoDataUrl }: { photoDataUrl: string }) {
   const steps = [
     "Reading skin tone & texture",
     "Detecting active conditions",
@@ -654,18 +743,39 @@ function AnalyzingScreen() {
   }, []);
 
   return (
-    <div
-      style={{
-        height: "100%",
-        background: "#0e0a06",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "40px 32px",
-        gap: 40,
-      }}
-    >
+    <div style={{ height: "100%", position: "relative", overflow: "hidden" }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: -20,
+          backgroundImage: `url(${photoDataUrl})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "blur(14px) saturate(1.2)",
+          transform: "scale(1.1)",
+          opacity: 0.45,
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "linear-gradient(180deg, rgba(14,10,6,0.78) 0%, rgba(14,10,6,0.92) 60%, rgba(14,10,6,1) 100%)",
+        }}
+      />
+      <div
+        style={{
+          position: "relative",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "40px 32px",
+          gap: 40,
+        }}
+      >
       {/* Orbiting rings */}
       <div style={{ position: "relative", width: 160, height: 160 }}>
         <svg
@@ -832,6 +942,7 @@ function AnalyzingScreen() {
           </div>
         ))}
       </div>
+      </div>
     </div>
   );
 }
@@ -947,9 +1058,11 @@ function ConditionBar({
 function ResultsScreen({
   conditions,
   onViewRoutine,
+  photoDataUrl,
 }: {
   conditions: Condition[];
   onViewRoutine: () => void;
+  photoDataUrl: string;
 }) {
   const score = getSkinScore(conditions);
   const highCount = conditions.filter((c) => c.severity === "high").length;
@@ -968,6 +1081,26 @@ function ResultsScreen({
           overflow: "hidden",
         }}
       >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            backgroundImage: `url(${photoDataUrl})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            filter: "blur(12px) saturate(1.1)",
+            opacity: 0.35,
+            transform: "scale(1.1)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "linear-gradient(160deg, rgba(44,26,14,0.92) 0%, rgba(74,46,24,0.92) 100%)",
+          }}
+        />
         <div
           style={{
             position: "absolute",
@@ -1058,6 +1191,63 @@ function ResultsScreen({
             </div>
           </div>
           <ScoreRing score={score} size={110} />
+        </div>
+      </div>
+
+      <div style={{ padding: "16px 20px 0" }}>
+        <div
+          style={{
+            background: "#fff",
+            borderRadius: 16,
+            border: "1px solid rgba(44,26,14,0.08)",
+            padding: 12,
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+          }}
+        >
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: 14,
+              overflow: "hidden",
+              background: "#f3ede6",
+              flexShrink: 0,
+              border: "1px solid rgba(44,26,14,0.08)",
+            }}
+          >
+            <img
+              src={photoDataUrl}
+              alt="Your scan"
+              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <p
+              style={{
+                fontFamily: "'DM Mono',monospace",
+                fontSize: 10,
+                letterSpacing: "0.15em",
+                textTransform: "uppercase",
+                color: "#8A7060",
+                marginBottom: 6,
+              }}
+            >
+              Your scan photo
+            </p>
+            <p
+              style={{
+                fontFamily: "'Raleway',sans-serif",
+                fontSize: 13,
+                fontWeight: 700,
+                color: "#2C1A0E",
+                lineHeight: 1.2,
+              }}
+            >
+              Saved to your device for tracking
+            </p>
+          </div>
         </div>
       </div>
 
@@ -1196,11 +1386,14 @@ function ResultsScreen({
 function RoutineScreen({
   products,
   conditions,
+  onCopyShoppingList,
 }: {
   products: Product[];
   conditions: Condition[];
+  onCopyShoppingList: () => Promise<void>;
 }) {
   const [tab, setTab] = useState<"AM" | "PM">("AM");
+  const [copied, setCopied] = useState(false);
   const amProducts = products.filter(
     (p) => p.when === "AM" || p.when === "AM/PM",
   );
@@ -1253,6 +1446,32 @@ function RoutineScreen({
           Based on {conditions.length} detected conditions ·
           Dermatologist-approved
         </p>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+          <button
+            onClick={async () => {
+              await onCopyShoppingList();
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1400);
+            }}
+            style={{
+              flex: 1,
+              background: copied ? "#4A7C6F" : "#2C1A0E",
+              border: "none",
+              borderRadius: 12,
+              padding: "12px 14px",
+              fontFamily: "'DM Mono',monospace",
+              fontSize: 11,
+              letterSpacing: "0.12em",
+              textTransform: "uppercase",
+              color: "#FAF7F2",
+              cursor: "pointer",
+              transition: "all 0.2s",
+            }}
+          >
+            {copied ? "Copied ✓" : "Copy shopping list"}
+          </button>
+        </div>
 
         {/* AM/PM Toggle */}
         <div
@@ -1415,6 +1634,7 @@ function RoutineScreen({
               >
                 {p.use}
               </p>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <span
                 style={{
                   fontFamily: "'DM Mono',monospace",
@@ -1429,6 +1649,29 @@ function RoutineScreen({
               >
                 {p.type}
               </span>
+                <a
+                  href={p.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    fontFamily: "'DM Mono',monospace",
+                    fontSize: 9,
+                    letterSpacing: "0.1em",
+                    textTransform: "uppercase",
+                    color: "#4A7C6F",
+                    background: "#E0F0EC",
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    border: "1px solid rgba(74,124,111,0.25)",
+                    textDecoration: "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  Shop ↗
+                </a>
+              </div>
             </div>
           </div>
         ))}
@@ -1477,9 +1720,24 @@ function RoutineScreen({
 }
 
 // ── Tracker Screen ────────────────────────────────────────
-function TrackerScreen({ onRescan }: { onRescan: () => void }) {
-  const weeks = ["Wk 1", "Wk 2", "Wk 3", "Wk 4", "Now"];
-  const scores = [42, 51, 58, 64, 71];
+function TrackerScreen({
+  onRescan,
+  history,
+}: {
+  onRescan: () => void;
+  history: ScanRecord[];
+}) {
+  const sorted = [...history].sort((a, b) => a.createdAt - b.createdAt);
+  const last = sorted[sorted.length - 1];
+  const prev = sorted[sorted.length - 2];
+  const points = sorted.slice(-5);
+  const weeks = points.map((p) =>
+    new Date(p.createdAt).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }),
+  );
+  const scores = points.map((p) => p.skinScore);
   const max = 100;
 
   return (
@@ -1520,9 +1778,128 @@ function TrackerScreen({ onRescan }: { onRescan: () => void }) {
             color: "#8A7060",
           }}
         >
-          4 weeks on your personalised routine
+          {sorted.length >= 2
+            ? `Comparing your last ${Math.min(sorted.length, 5)} scans`
+            : "Scan at least twice to compare"}
         </p>
       </div>
+
+      {sorted.length < 2 && (
+        <div style={{ padding: "0 20px" }}>
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              padding: "18px 16px",
+              border: "1px solid rgba(44,26,14,0.08)",
+              marginBottom: 14,
+            }}
+          >
+            <p
+              style={{
+                fontFamily: "'Raleway',sans-serif",
+                fontSize: 14,
+                fontWeight: 700,
+                color: "#2C1A0E",
+                marginBottom: 6,
+              }}
+            >
+              No comparisons yet
+            </p>
+            <p
+              style={{
+                fontFamily: "'DM Mono',monospace",
+                fontSize: 11,
+                color: "#8A7060",
+                lineHeight: 1.6,
+              }}
+            >
+              Do a scan today, then scan again later to see your score trend and
+              photo comparison.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {sorted.length >= 2 && last && prev && (
+        <div style={{ padding: "0 20px" }}>
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 16,
+              padding: 14,
+              border: "1px solid rgba(44,26,14,0.08)",
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              marginBottom: 14,
+            }}
+          >
+            <div
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: 16,
+                overflow: "hidden",
+                border: "1px solid rgba(44,26,14,0.08)",
+                background: "#f3ede6",
+                flexShrink: 0,
+              }}
+            >
+              <img
+                src={prev.photoDataUrl}
+                alt="Previous scan"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            </div>
+            <div
+              style={{
+                width: 64,
+                height: 64,
+                borderRadius: 16,
+                overflow: "hidden",
+                border: "1px solid rgba(44,26,14,0.08)",
+                background: "#f3ede6",
+                flexShrink: 0,
+              }}
+            >
+              <img
+                src={last.photoDataUrl}
+                alt="Latest scan"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <p
+                style={{
+                  fontFamily: "'DM Mono',monospace",
+                  fontSize: 10,
+                  letterSpacing: "0.14em",
+                  textTransform: "uppercase",
+                  color: "#8A7060",
+                  marginBottom: 6,
+                }}
+              >
+                Latest vs previous
+              </p>
+              <p
+                style={{
+                  fontFamily: "'Raleway',sans-serif",
+                  fontSize: 14,
+                  fontWeight: 800,
+                  color: "#2C1A0E",
+                }}
+              >
+                {prev.skinScore} → {last.skinScore}{" "}
+                <span style={{ color: last.skinScore >= prev.skinScore ? "#4A7C6F" : "#D94F2C" }}>
+                  ({last.skinScore - prev.skinScore >= 0 ? "+" : ""}
+                  {last.skinScore - prev.skinScore})
+                </span>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Chart */}
       <div
@@ -1619,7 +1996,7 @@ function TrackerScreen({ onRescan }: { onRescan: () => void }) {
               color: "#4A7C6F",
             }}
           >
-            Overall improvement
+            Overall change
           </span>
           <span
             style={{
@@ -1629,7 +2006,11 @@ function TrackerScreen({ onRescan }: { onRescan: () => void }) {
               color: "#4A7C6F",
             }}
           >
-            +29 pts
+            {scores.length >= 2
+              ? `${scores[scores.length - 1] - scores[0] >= 0 ? "+" : ""}${
+                  scores[scores.length - 1] - scores[0]
+                } pts`
+              : "—"}
           </span>
         </div>
       </div>
@@ -2165,17 +2546,50 @@ export default function App() {
   const [conditions, setConditions] = useState<Condition[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [analyzed, setAnalyzed] = useState(false);
+  const [scanPhotoDataUrl, setScanPhotoDataUrl] = useState<string>("");
+  const [history, setHistory] = useState<ScanRecord[]>([]);
 
   const goTo = (s: Screen) => setScreen(s);
 
-  const handleCapture = () => {
+  useEffect(() => {
+    setHistory(loadScanHistory());
+  }, []);
+
+  const handleCapture = (photoDataUrl: string) => {
+    setScanPhotoDataUrl(photoDataUrl);
     goTo("analyzing");
     setTimeout(() => {
-      setConditions(generateResults());
-      setProducts(generateProducts());
+      const nextConditions = generateResults();
+      const nextProducts = generateProducts();
+      setConditions(nextConditions);
+      setProducts(nextProducts);
       setAnalyzed(true);
+
+      const record: ScanRecord = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        createdAt: Date.now(),
+        photoDataUrl,
+        skinScore: getSkinScore(nextConditions),
+        conditions: nextConditions,
+        products: nextProducts,
+      };
+      setHistory((prev) => {
+        const next = [record, ...prev].slice(0, SCAN_HISTORY_MAX_ITEMS);
+        saveScanHistory(next);
+        return next;
+      });
+
       goTo("results");
     }, 5200);
+  };
+
+  const handleCopyShoppingList = async () => {
+    const list = products
+      .map((p) => `- ${p.name} (${p.when}) — ${p.url}`)
+      .join("\n");
+    const title = "AFRISKIN shopping list";
+    const text = `${title}\n\n${list}\n`;
+    await copyToClipboard(text);
   };
 
   const visibleNav = !["splash", "scan", "analyzing"].includes(screen);
@@ -2227,21 +2641,28 @@ export default function App() {
             )}
             {screen === "home" && <HomeScreen onScan={() => goTo("scan")} />}
             {screen === "scan" && <ScanFace onCapture={handleCapture} />}
-            {screen === "analyzing" && <AnalyzingScreen />}
+            {screen === "analyzing" && (
+              <AnalyzingScreen photoDataUrl={scanPhotoDataUrl} />
+            )}
             {screen === "results" && analyzed && (
               <ResultsScreen
                 conditions={conditions}
                 onViewRoutine={() => goTo("routine")}
+                photoDataUrl={scanPhotoDataUrl}
               />
             )}
             {screen === "results" && !analyzed && (
               <HomeScreen onScan={() => goTo("scan")} />
             )}
             {screen === "routine" && (
-              <RoutineScreen products={products} conditions={conditions} />
+              <RoutineScreen
+                products={products}
+                conditions={conditions}
+                onCopyShoppingList={handleCopyShoppingList}
+              />
             )}
             {screen === "tracker" && (
-              <TrackerScreen onRescan={() => goTo("scan")} />
+              <TrackerScreen onRescan={() => goTo("scan")} history={history} />
             )}
           </div>
         </div>
