@@ -389,15 +389,18 @@ function ScanFace({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [streaming, setStreaming] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState<number | null>(null);
   const [captured, setCaptured] = useState(false);
+  const [capturedPhotoDataUrl, setCapturedPhotoDataUrl] = useState<string>("");
 
   const capturePhoto = () => {
     const video = videoRef.current;
     if (!video) return null;
-    const w = Math.max(1, video.videoWidth || 720);
-    const h = Math.max(1, video.videoHeight || 1280);
+    if (!video.videoWidth || !video.videoHeight) return null;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
@@ -414,8 +417,14 @@ function ScanFace({
     navigator.mediaDevices
       ?.getUserMedia({ video: { facingMode: "user" } })
       .then((stream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+        const video = videoRef.current;
+        if (video) {
+          video.srcObject = stream;
+          const onLoaded = () => {
+            setVideoReady(true);
+            void video.play().catch(() => undefined);
+          };
+          video.addEventListener("loadedmetadata", onLoaded, { once: true });
         }
         setStreaming(true);
       })
@@ -438,14 +447,17 @@ function ScanFace({
         clearInterval(iv);
         setCountdown(null);
         setCaptured(true);
-        const photo = capturePhoto();
-        const dataUrl =
-          photo ||
-          "data:image/svg+xml;charset=utf-8," +
-            encodeURIComponent(
-              `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2C1A0E"/><stop offset="1" stop-color="#0e0a06"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><text x="50%" y="50%" fill="rgba(250,247,242,0.65)" font-family="Arial" font-size="22" text-anchor="middle">Prototype selfie</text></svg>`,
-            );
-        setTimeout(() => onCapture(dataUrl), 500);
+        window.setTimeout(() => {
+          const photo = capturePhoto();
+          const dataUrl =
+            photo ||
+            "data:image/svg+xml;charset=utf-8," +
+              encodeURIComponent(
+                `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280"><defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2C1A0E"/><stop offset="1" stop-color="#0e0a06"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><text x="50%" y="50%" fill="rgba(250,247,242,0.65)" font-family="Arial" font-size="22" text-anchor="middle">Prototype selfie</text></svg>`,
+              );
+          setCapturedPhotoDataUrl(dataUrl);
+          onCapture(dataUrl);
+        }, 120);
       } else {
         setCountdown(c);
       }
@@ -463,19 +475,48 @@ function ScanFace({
     >
       {/* Viewfinder */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-        {streaming ? (
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
+        {capturedPhotoDataUrl && (
+          <div
             style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              transform: "scaleX(-1)",
+              position: "absolute",
+              inset: 0,
+              backgroundImage: `url(${capturedPhotoDataUrl})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              filter: "blur(10px) saturate(1.2)",
+              transform: "scale(1.12)",
+              opacity: 0.55,
             }}
           />
+        )}
+        {streaming ? (
+          capturedPhotoDataUrl ? (
+            <img
+              src={capturedPhotoDataUrl}
+              alt="Captured scan"
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                transform: "scaleX(-1)",
+                position: "relative",
+              }}
+            />
+          ) : (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                transform: "scaleX(-1)",
+                position: "relative",
+              }}
+            />
+          )
         ) : (
           <div
             style={{
@@ -673,7 +714,7 @@ function ScanFace({
       >
         <button
           onClick={startCapture}
-          disabled={!!countdown || captured}
+          disabled={!videoReady || !!countdown || captured}
           style={{
             width: 72,
             height: 72,
@@ -1727,6 +1768,7 @@ function TrackerScreen({
   onRescan: () => void;
   history: ScanRecord[];
 }) {
+  const [selected, setSelected] = useState<ScanRecord | null>(null);
   const sorted = [...history].sort((a, b) => a.createdAt - b.createdAt);
   const last = sorted[sorted.length - 1];
   const prev = sorted[sorted.length - 2];
@@ -1744,6 +1786,86 @@ function TrackerScreen({
     <div
       style={{ background: "#FAF7F2", minHeight: "100%", paddingBottom: 100 }}
     >
+      {selected && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setSelected(null)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 50,
+            background: "rgba(14,10,6,0.82)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 18,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 420,
+              background: "#0e0a06",
+              borderRadius: 18,
+              overflow: "hidden",
+              border: "1px solid rgba(250,247,242,0.12)",
+            }}
+          >
+            <div style={{ position: "relative" }}>
+              <img
+                src={selected.photoDataUrl}
+                alt="Scan photo"
+                style={{ width: "100%", height: 420, objectFit: "cover" }}
+              />
+              <button
+                onClick={() => setSelected(null)}
+                style={{
+                  position: "absolute",
+                  top: 10,
+                  right: 10,
+                  width: 36,
+                  height: 36,
+                  borderRadius: 999,
+                  border: "1px solid rgba(250,247,242,0.18)",
+                  background: "rgba(14,10,6,0.55)",
+                  color: "rgba(250,247,242,0.92)",
+                  cursor: "pointer",
+                  fontFamily: "'DM Mono',monospace",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: "12px 14px 14px" }}>
+              <p
+                style={{
+                  fontFamily: "'DM Mono',monospace",
+                  fontSize: 10,
+                  letterSpacing: "0.14em",
+                  textTransform: "uppercase",
+                  color: "rgba(250,247,242,0.55)",
+                  marginBottom: 6,
+                }}
+              >
+                {new Date(selected.createdAt).toLocaleString()}
+              </p>
+              <p
+                style={{
+                  fontFamily: "'Raleway',sans-serif",
+                  fontSize: 14,
+                  fontWeight: 800,
+                  color: "rgba(250,247,242,0.92)",
+                }}
+              >
+                Skin score: {selected.skinScore}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ padding: "28px 24px 20px" }}>
         <p
           style={{
@@ -1835,7 +1957,8 @@ function TrackerScreen({
               marginBottom: 14,
             }}
           >
-            <div
+            <button
+              onClick={() => setSelected(prev)}
               style={{
                 width: 64,
                 height: 64,
@@ -1844,6 +1967,8 @@ function TrackerScreen({
                 border: "1px solid rgba(44,26,14,0.08)",
                 background: "#f3ede6",
                 flexShrink: 0,
+                padding: 0,
+                cursor: "pointer",
               }}
             >
               <img
@@ -1851,8 +1976,9 @@ function TrackerScreen({
                 alt="Previous scan"
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
-            </div>
-            <div
+            </button>
+            <button
+              onClick={() => setSelected(last)}
               style={{
                 width: 64,
                 height: 64,
@@ -1861,6 +1987,8 @@ function TrackerScreen({
                 border: "1px solid rgba(44,26,14,0.08)",
                 background: "#f3ede6",
                 flexShrink: 0,
+                padding: 0,
+                cursor: "pointer",
               }}
             >
               <img
@@ -1868,7 +1996,7 @@ function TrackerScreen({
                 alt="Latest scan"
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
-            </div>
+            </button>
             <div style={{ flex: 1 }}>
               <p
                 style={{
