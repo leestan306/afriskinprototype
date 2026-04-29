@@ -388,6 +388,7 @@ function ScanFace({
   onCapture: (photoDataUrl: string) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [streaming, setStreaming] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [error, setError] = useState("");
@@ -438,6 +439,27 @@ function ScanFace({
     };
   }, []);
 
+  const pickPhoto = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl) return;
+      setCaptured(true);
+      setCapturedPhotoDataUrl(dataUrl);
+      onCapture(dataUrl);
+    };
+    reader.readAsDataURL(file);
+
+    // allow selecting the same image again
+    e.target.value = "";
+  };
+
   const startCapture = () => {
     setCountdown(3);
     let c = 3;
@@ -473,6 +495,14 @@ function ScanFace({
         background: "#0e0a06",
       }}
     >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="user"
+        onChange={handleFileChange}
+        style={{ display: "none" }}
+      />
       {/* Viewfinder */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
         {capturedPhotoDataUrl && (
@@ -713,6 +743,27 @@ function ScanFace({
         }}
       >
         <button
+          onClick={pickPhoto}
+          disabled={captured}
+          style={{
+            width: "100%",
+            maxWidth: 320,
+            padding: "14px 16px",
+            borderRadius: 14,
+            background: captured ? "rgba(250,247,242,0.08)" : "#C45C2A",
+            border: "1px solid rgba(250,247,242,0.12)",
+            color: captured ? "rgba(250,247,242,0.55)" : "#FAF7F2",
+            fontFamily: "'DM Mono',monospace",
+            fontSize: 11,
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            cursor: captured ? "default" : "pointer",
+          }}
+        >
+          {captured ? "Photo selected ✓" : "Take photo / Upload"}
+        </button>
+
+        <button
           onClick={startCapture}
           disabled={!videoReady || !!countdown || captured}
           style={{
@@ -749,7 +800,7 @@ function ScanFace({
             textTransform: "uppercase",
           }}
         >
-          Tap to scan
+          Tap to scan (live) or upload a photo
         </p>
       </div>
     </div>
